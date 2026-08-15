@@ -1,0 +1,55 @@
+name: Wrangler stock npm Termux baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    env:
+      TERMUX_IMAGE: termux/termux-docker@sha256:3aed9c7fbcf9195a9919deaad418da006232864a779fb4f322d68a34887a2e15
+    steps:
+      - name: Exercise unmodified npm Wrangler on native Termux
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = aarch64
+          docker pull "$TERMUX_IMAGE"
+          docker run --rm --privileged "$TERMUX_IMAGE" /entrypoint.sh bash -lc '
+            set -Eeuo pipefail
+            pkg update -y
+            pkg install -y nodejs
+            printf "Node: %s\n" "$(node -p "process.platform + \":\" + process.arch")"
+            set +e
+            npm install -g wrangler@4.123.0 >"$HOME/npm-wrangler.log" 2>&1
+            install_rc=$?
+            set -e
+            cat "$HOME/npm-wrangler.log"
+            if (( install_rc != 0 )); then
+              printf "STOCK_NPM_RESULT=install_failed rc=%s\n" "$install_rc"
+              exit 0
+            fi
+
+            wrangler --version
+            smoke="$HOME/npm-wrangler-smoke"
+            mkdir -p "$smoke" && cd "$smoke"
+            cat > index.js <<"JS"
+          export default { fetch() { return new Response("stock-npm"); } };
+          JS
+            cat > wrangler.jsonc <<"JSON"
+          {"name":"stock-npm-termux","main":"index.js","compatibility_date":"2026-08-01"}
+          JSON
+            set +e
+            wrangler deploy --dry-run --outdir "$smoke/out" >"$HOME/npm-wrangler-dry-run.log" 2>&1
+            dry_rc=$?
+            set -e
+            cat "$HOME/npm-wrangler-dry-run.log"
+            if (( dry_rc != 0 )); then
+              printf "STOCK_NPM_RESULT=dry_run_failed rc=%s\n" "$dry_rc"
+              exit 0
+            fi
+            echo "STOCK_NPM_RESULT=fully_working"
+          '
