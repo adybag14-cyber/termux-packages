@@ -1,0 +1,51 @@
+name: Wrangler package lint
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: add/wrangler
+      - name: Lint Termux package recipe
+        run: |
+          set -Eeuo pipefail
+          ./scripts/lint-packages.sh packages/wrangler/build.sh
+          bash -n packages/wrangler/build.sh packages/wrangler/tests.sh
+          python3 -m py_compile packages/wrangler/prepare-wrangler-deploy.py
+          test "$(git ls-files -s packages/wrangler/build.sh | awk '{print $1}')" = 100644
+          test "$(git ls-files -s packages/wrangler/tests.sh | awk '{print $1}')" = 100644
+      - name: Validate metadata/source closure
+        run: |
+          set -Eeuo pipefail
+          bash -c '
+            set +u
+            source packages/wrangler/build.sh
+            test "${#TERMUX_PKG_SRCURL[@]}" -eq "${#TERMUX_PKG_SHA256[@]}"
+            test "$TERMUX_PKG_VERSION" = 4.123.0
+            test "$TERMUX_PKG_LICENSE" = "MIT, Apache-2.0"
+            test "$TERMUX_PKG_EXCLUDED_ARCHES" = "arm, i686, x86_64"
+          '
+          if grep -R -E 'adybag14-cyber/termux-(python|hermes)|144\.21\.61\.111|oracle' packages/wrangler; then
+            echo 'Community distribution reference leaked into official recipe' >&2
+            exit 1
+          fi
+      - name: Dry-run workerd Android patch
+        run: |
+          set -Eeuo pipefail
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          curl -fsSL --retry 4 \
+            https://github.com/cloudflare/workerd/archive/refs/tags/v1.20260811.1.tar.gz \
+            -o "$tmp/workerd.tar.gz"
+          echo 'bad369875859db11ae72cf2ce8e221345072a1b580d58e6849fadd0ee6b66836  '"$tmp/workerd.tar.gz" | sha256sum -c -
+          tar -xf "$tmp/workerd.tar.gz" -C "$tmp"
+          patch --dry-run -d "$tmp/workerd-1.20260811.1" -p1 \
+            < packages/wrangler/patches/workerd-android.patch
